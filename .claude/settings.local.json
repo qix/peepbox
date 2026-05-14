@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(lsusb)",
+      "Read(//dev/bus/usb/**)",
+      "Read(//dev/**)",
+      "Bash(arduino-cli board *)"
+    ]
+  }
+}

@@ -1,0 +1,59 @@
+{
+  "name": "Claudebox Arduino",
+  "build": {
+    "context": "..",
+    "dockerfile": "Dockerfile",
+    "args": {
+      "TZ": "${localEnv:TZ:America/Los_Angeles}",
+      "CLAUDE_CODE_VERSION": "latest"
+    }
+  },
+  "runArgs": [
+    "--add-host=host.docker.internal:host-gateway",
+    "--network=sandbox-net",
+    "--device=/dev/ttyACM0",
+    "--device-cgroup-rule=c 166:* rwm",
+    "--device-cgroup-rule=c 188:* rwm"
+  ],
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "anthropic.claude-code",
+        "eamodio.gitlens",
+        "platformio.platformio-ide",
+        "arduino.vscode-arduino"
+      ],
+      "settings": {
+        "editor.formatOnSave": true,
+        "terminal.integrated.defaultProfile.linux": "bash",
+        "terminal.integrated.profiles.linux": {
+          "bash": {
+            "path": "bash",
+            "icon": "terminal-bash"
+          }
+        }
+      }
+    }
+  },
+  "remoteUser": "dev",
+  "mounts": [
+    "source=claude-code-bashhistory-${devcontainerId},target=/commandhistory,type=volume",
+    "source=claude-code-config-${devcontainerId},target=/home/dev/.claude,type=volume",
+    "source=/dev/bus/usb,target=/dev/bus/usb,type=bind",
+    "source=/run/udev,target=/run/udev,type=bind,readonly"
+  ],
+  "containerEnv": {
+    "NODE_OPTIONS": "--max-old-space-size=4096",
+    "DISABLE_ERROR_REPORTING": "1",
+    "ALL_PROXY": "http://host.docker.internal:8080",
+    "HTTPS_PROXY": "http://host.docker.internal:8080",
+    "HTTP_PROXY": "http://host.docker.internal:8080",
+    "NODE_EXTRA_CA_CERTS": "/usr/local/share/ca-certificates/mitmproxy.crt",
+    "CLAUDE_CONFIG_DIR": "/home/dev/.claude",
+    "PLATFORMIO_CORE_DIR": "/home/dev/.platformio"
+  },
+  "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind,consistency=delegated",
+  "workspaceFolder": "/workspace",
+  "postStartCommand": "sudo /usr/local/bin/setup-claudebox.sh",
+  "waitFor": "postStartCommand"
+}
