@@ -3,10 +3,11 @@
 #include <Stepper.h>
 
 // Configuration
-#define DATA_PIN    32
+#define SWITCH_PIN 23
+#define LED_PIN    32
 #define NUM_RINGS   5
 #define DELAY_MS    100  // Sped it up slightly since there are 104 LEDs now!
-	
+
 const int STEPS_PER_REV = 2048;
 Stepper motor(STEPS_PER_REV, 25, 27, 26, 14);
 
@@ -19,11 +20,13 @@ uint32_t ringColors[NUM_RINGS];
 // Total LEDs = 12 + 16 + 20 + 24 + 32 = 104
 #define TOTAL_LEDS 104
 
-Adafruit_NeoPixel strip(TOTAL_LEDS, DATA_PIN, NEO_GRB + NEO_KHZ800);
+Adafruit_NeoPixel strip(TOTAL_LEDS, LED_PIN, NEO_GRB + NEO_KHZ800);
 
 void setup() {
   Serial.begin(115200);
   motor.setSpeed(15);
+
+  pinMode(SWITCH_PIN, INPUT_PULLUP);
 
   strip.begin();
   strip.show();
@@ -65,8 +68,7 @@ void loop() {
       strip.setPixelColor(currentGlobalLED, strip.Color(255, 255, 255));
       strip.show();
 
-      motor.step(600);
-      delay(DELAY_MS);
+      motor.step(-600);
 
       // Turn it off
       strip.setPixelColor(currentGlobalLED, strip.Color(0, 0, 0));
