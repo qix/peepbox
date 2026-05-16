@@ -1,10 +1,14 @@
 #include <Arduino.h>
 #include <Adafruit_NeoPixel.h>
+#include <Stepper.h>
 
 // Configuration
 #define DATA_PIN    32
 #define NUM_RINGS   5
 #define DELAY_MS    100  // Sped it up slightly since there are 104 LEDs now!
+	
+const int STEPS_PER_REV = 2048;
+Stepper motor(STEPS_PER_REV, 25, 27, 26, 14);
 
 // Define the sizes of your rings
 int ringSizes[NUM_RINGS] = {12, 16, 20, 24, 32};
@@ -19,7 +23,7 @@ Adafruit_NeoPixel strip(TOTAL_LEDS, DATA_PIN, NEO_GRB + NEO_KHZ800);
 
 void setup() {
   Serial.begin(115200);
-  delay(1000);
+  motor.setSpeed(15);
 
   strip.begin();
   strip.show();
@@ -61,6 +65,7 @@ void loop() {
       strip.setPixelColor(currentGlobalLED, strip.Color(255, 255, 255));
       strip.show();
 
+      motor.step(600);
       delay(DELAY_MS);
 
       // Turn it off
