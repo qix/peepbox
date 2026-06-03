@@ -11,7 +11,6 @@
   "runArgs": [
     "--add-host=host.docker.internal:host-gateway",
     "--network=sandbox-net",
-    "--device=/dev/ttyACM0",
     "--device-cgroup-rule=c 166:* rwm",
     "--device-cgroup-rule=c 188:* rwm"
   ],
@@ -39,7 +38,7 @@
   "mounts": [
     "source=claude-code-bashhistory-${devcontainerId},target=/commandhistory,type=volume",
     "source=claude-code-config-${devcontainerId},target=/home/dev/.claude,type=volume",
-    "source=/dev/bus/usb,target=/dev/bus/usb,type=bind",
+    "source=/dev,target=/dev,type=bind",
     "source=/run/udev,target=/run/udev,type=bind,readonly"
   ],
   "containerEnv": {

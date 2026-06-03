@@ -29,7 +29,7 @@ float firstHoleDeg[NUM_RINGS] = {
   SWITCH_ROT,
   SWITCH_ROT,
 };
-int pixelCounts[NUM_RINGS] = {20, 30, 40, 40, 50};
+int holeCounts[NUM_RINGS] = {20, 30, 40, 40, 50};
 
 // Define colors for each ring (Red, Green, Blue, Yellow, Purple)
 uint32_t ringColors[NUM_RINGS];
@@ -98,10 +98,49 @@ void loop() {
   strip.clear();
 
   unsigned long now = millis();
+
+  // Current rotation of the wheel since the last switch trigger.
+  float degrees = (stepsSinceSwitch * 360.0f) / stepsPerRev;
+
   if (1) {
-    for (int r = 0; r < 5; r++) {
-      strip.setPixelColor(ringStart[r], RED);
-      strip.setPixelColor(ringStart[r] + ringSizes[r] / 2, GREEN);
+    // Walk every pixel in the chain, tracking which ring it belongs to and
+    // its index within that ring.
+    int ring = 0;
+    int ringPixel = 0;
+    for (int i = 0; i < TOTAL_LEDS; i++) {
+      // Where this LED currently sits, in degrees, as the wheel turns. The
+      // LEDs are evenly spaced around the ring, and the whole ring is rotated
+      // by `degrees`.
+      float pixelDeg = (ringPixel * 360.0f) / ringSizes[ring] + degrees;
+
+      // Holes are evenly spaced too, with the first one at firstHoleDeg[ring].
+      // Reduce the gap from that first hole into a single hole spacing, then
+      // centre it so it measures the distance to the *nearest* hole.
+      float holeSpacing = 360.0f / holeCounts[ring];
+      float distanceToClosestHole = fmodf(pixelDeg - firstHoleDeg[ring], holeSpacing);
+      if (distanceToClosestHole >  holeSpacing / 2) distanceToClosestHole -= holeSpacing;
+      if (distanceToClosestHole < -holeSpacing / 2) distanceToClosestHole += holeSpacing;
+      // distanceToClosestHole < 0  -> the hole is still coming up
+      // distanceToClosestHole > 0  -> the hole has just passed
+
+      // Light the pixel brightest when it lines up with a hole, fading out as
+      // it moves away. (Tweak this to taste.)
+      float closeness = 1.0f - fabsf(distanceToClosestHole) / (holeSpacing / 2);
+      if (closeness < 0) closeness = 0;
+      byte b = (byte)(closeness * 255);
+
+      if (distanceToClosestHole < 0) {
+	strip.setPixelColor(i, strip.Color(b, 0, 0));
+      } else {
+	strip.setPixelColor(i, strip.Color(0, b, 0));
+      }
+
+      // Advance to the next LED, rolling over into the next ring.
+      ringPixel += 1;
+      if (ringPixel >= ringSizes[ring]) {
+        ringPixel = 0;
+        ring += 1;
+      }
     }
   }else if (1 || now % 15000 < 10000) {
       int ring = 0;
@@ -181,16 +220,17 @@ void loop() {
   lastSwitchState = switchState;
 
 
-  float degrees = (stepsSinceSwitch * 360.0f) / stepsPerRev;
   if (now - lastReportMs >= 50) {
     Serial.print("Rotation: ");
     Serial.print(degrees);
     Serial.println(" deg");
     lastReportMs = now;
-
   }
-  if (buttonPushed && degrees > 225.25) {
-  //if (degrees > 0.10) {
-    motorSpeed = 0;
-  }
+  /**
+   * Used for centering on the wheel
+	  if (buttonPushed && degrees > 225.25) {
+	  //if (degrees > 0.10) {
+	    motorSpeed = 0;
+	  }
+  */
 }
