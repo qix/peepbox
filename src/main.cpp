@@ -391,6 +391,13 @@ uint32_t pixelColor(
   float closeness = 1.0f - fabsf(distanceToClosestHole) / (holeSpacing / 2);
   if (closeness < 0) closeness = 0;
 
+
+  float ringP = fmodf(millis() / (5000.0f), ring);
+
+  float brightness = fabsf(ring - ringP);
+  if (brightness < 0) { brightness = 0; }
+  return strip.Color((byte) (brightness * 255), 0, 0);
+
   // First ring bright white (split light)
   if (ring == 0) return WHITE;
 
