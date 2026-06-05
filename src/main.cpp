@@ -117,6 +117,9 @@ bool calibrated = false;
 // How long the detector line must hold a value before calibration trusts it.
 #define DETECTOR_DEBOUNCE_MS 50
 
+// How long a flipped reading must persist before an edge sweep believes it.
+#define DETECTOR_EDGE_DEBOUNCE_MS 5
+
 // Single raw sample of the detector line. True when light is reaching the sensor
 // through a hole. Flip the comparison if your sensor is active-low; if it's
 // analog, swap for an analogRead() threshold.
@@ -141,6 +144,21 @@ bool detectorReads() {
     if (millis() - start > 50) break;  // never settled; take the latest sample
   }
   return value;
+}
+
+// Detector read tuned for finding an edge while the wheel is stepping. We tell it
+// the value we expect to still be seeing; as long as the line agrees it returns
+// immediately, so sweeping across a long ON (or OFF) run costs nothing. Only when a
+// sample flips away from `expected` do we pause, holding it for
+// DETECTOR_EDGE_DEBOUNCE_MS to reject a hole-edge glitch before trusting the change.
+// Unlike detectorReads(), there is no fixed per-call wait.
+bool detectorHolds(bool expected) {
+  if (detectorRaw() == expected) return expected;
+  unsigned long changedAt = millis();
+  while (millis() - changedAt < DETECTOR_EDGE_DEBOUNCE_MS) {
+    if (detectorRaw() == expected) return expected;  // glitch; snapped back
+  }
+  return !expected;  // the flip held: a real edge
 }
 
 // Step the wheel by `steps` in the running direction, keeping wheelSteps in sync.
@@ -186,6 +204,7 @@ void calibrate() {
   Serial.println("Calibration: searching for zero...");
 
   // 1. Light everything and rotate until a hole lines an LED up with the detector.
+  Serial.printf("% 4dms] Step 1. Find initial position\n", millis());
   setAllLeds(WHITE);
   long startSteps = wheelSteps;
   while (!detectorReads() && (wheelSteps - startSteps) < BIG_WHEEL_STEPS) {
@@ -200,18 +219,18 @@ void calibrate() {
   setAllLeds(0);
   delay(100);
   unsigned long offTime = waitDetector(false);
-  Serial.printf("% 4dms] 2. Wait until off (%dms)\n", millis(), offTime);
+  Serial.printf("% 4dms] Step 2. Wait until off (%dms)\n", millis(), offTime);
 
   // 3. Measure the ON switching time (light restored -> reads 1).
   setAllLeds(WHITE);
   unsigned long onTime = waitDetector(true);
-  Serial.printf("% 4dms] 3. Wait until back on (%dms)\n", millis(), onTime);
+  Serial.printf("% 4dms] Step 3. Wait until back on (%dms)\n", millis(), onTime);
 
   // Settle interval for the per-LED sweep: double the slower switch time.
   unsigned long settle = 2 * max(offTime, onTime);
   if (settle < 5) settle = 5;
-  Serial.printf("Switch times: off=%lums on=%lums -> settle=%lums\n",
-                offTime, onTime, settle);
+  Serial.printf("% 4dms] Switch times: off=%lums on=%lums -> settle=%lums\n",
+                millis(), offTime, onTime, settle);
 
   // 4. Light one ring-4 LED at a time; the one that reaches the detector is ours.
   int chosen = -1;
@@ -224,18 +243,24 @@ void calibrate() {
     Serial.println("Calibration FAILED: no single LED lit the detector.");
     return;
   }
-  Serial.printf("Chosen ring-4 LED: pixel %d (strip index %d)\n",
-                chosen, ringStart[4] + chosen);
+  Serial.printf("% 4dms] Chosen ring-4 LED: pixel %d (strip index %d)\n",
+                millis(), chosen, ringStart[4] + chosen);
 
-  // 5. Centre on the chosen LED: leave the current pulse, then capture the next
-  //    rising (0->1) and falling (1->0) edges and take their midpoint.
+  // 5. Centre on the chosen LED by measuring the span over which it lights the
+  //    detector. The wheel is sitting inside that ON pulse now, so rotate both ways
+  //    to find each edge of *this* pulse and take the midpoint — no need to leave it
+  //    and chase the next one. We use detectorHolds() so stepping across the span
+  //    costs nothing; we only wait when a reading flips, to confirm a real edge.
   setOneLed(ringStart[4] + chosen, WHITE);
-  while (detectorReads()) stepWheel(1);    // off the current pulse
-  while (!detectorReads()) stepWheel(1);   // rising edge
-  long rising = wheelSteps;
-  while (detectorReads()) stepWheel(1);    // falling edge
-  long falling = wheelSteps;
-  long centerSteps = (rising + falling) / 2;
+
+  Serial.printf("% 4dms] Step 5. Measure detector-on span (both directions)\n",
+                millis());
+  while (detectorHolds(true)) stepWheel(1);    // forward to the high-side edge
+  long highEdge = wheelSteps;
+  while (detectorHolds(false)) stepWheel(-1);  // back into the ON span
+  while (detectorHolds(true)) stepWheel(-1);   // out the far (low-side) edge
+  long lowEdge = wheelSteps;
+  long centerSteps = (highEdge + lowEdge) / 2;
 
   // 6. The chosen LED is now known to be centred under the detector, so the wheel
   //    rotation there is DETECTOR_DEG minus the LED's own angle within its ring.
@@ -281,7 +306,7 @@ void setupOTA() {
   ArduinoOTA.onError([](ota_error_t err) {
     Serial.printf("\nOTA error %u\n", err);
   });
-  +rduinoOTA.onEnd([]() { Serial.println("\nOTA done, rebooting."); });
+  ArduinoOTA.onEnd([]() { Serial.println("\nOTA done, rebooting."); });
 
   ArduinoOTA.begin();
   otaReady = true;

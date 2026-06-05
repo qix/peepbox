@@ -43,11 +43,14 @@ Procedure:
    read 1 is the one currently aligned with the detector through a hole. Call it
    the *chosen LED*.
 
-5. **Walk to a clean edge.** With only the chosen LED lit, start the motor
-   rotating. Continue until the detector reads 1, then keep rotating until it
-   reads 0 again. The midpoint between the rising edge (0 → 1) and the falling
-   edge (1 → 0) is the rotation at which the chosen LED is exactly centred under
-   the detector.
+5. **Measure the on-span.** With only the chosen LED lit, the wheel is already
+   sitting inside the pulse where that LED lights the detector. Rotate one way
+   until the detector reads 0 to find one edge of the pulse, then rotate back the
+   other way through the on-span until it reads 0 again to find the opposite edge.
+   The midpoint of those two edges is the rotation at which the chosen LED is
+   exactly centred under the detector. Reading both edges of *this* pulse (rather
+   than walking off it to the next one) keeps the centre tied to the LED we just
+   identified.
 
 6. **Compute 0°.** We now know the precise rotation at which a *specific, known*
    LED is centred on the detector. Because the LED's angular position within its
