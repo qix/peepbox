@@ -123,8 +123,17 @@ bool calibrated = false;
 // Single raw sample of the detector line. True when light is reaching the sensor
 // through a hole. Flip the comparison if your sensor is active-low; if it's
 // analog, swap for an analogRead() threshold.
+int lastDetectorRead = -1;
 bool detectorRaw() {
-  return digitalRead(DETECTOR_PIN) == LOW;
+  int read = digitalRead(DETECTOR_PIN);
+  if (read != lastDetectorRead) {
+    lastDetectorRead = read;
+    Serial.printf(
+        "%03d] Detector %s [steps=%d]\n",
+        millis(), read == LOW ? "on" : "off", wheelSteps
+      );
+  }
+  return read == LOW;
 }
 
 // Debounced read used during calibration: returns a value only once the line has
@@ -253,14 +262,19 @@ void calibrate() {
   //    costs nothing; we only wait when a reading flips, to confirm a real edge.
   setOneLed(ringStart[4] + chosen, WHITE);
 
-  Serial.printf("% 4dms] Step 5. Measure detector-on span (both directions)\n",
-                millis());
+  Serial.printf("% 4dms] Step 5a. Step until detector is off\n", millis());
   while (detectorHolds(true)) stepWheel(1);    // forward to the high-side edge
   long highEdge = wheelSteps;
+  Serial.printf("% 4dms] Step 5b. Reverse until detector back on\n", millis());
+  Serial.println(detectorRaw());
+  Serial.println(detectorRaw());
+  Serial.println(detectorRaw());
   while (detectorHolds(false)) stepWheel(-1);  // back into the ON span
+  Serial.printf("% 4dms] Step 5c. Step until detector is off again\n", millis());
   while (detectorHolds(true)) stepWheel(-1);   // out the far (low-side) edge
   long lowEdge = wheelSteps;
   long centerSteps = (highEdge + lowEdge) / 2;
+  Serial.printf("% 4dms] Result: %d steps\n", millis(), centerSteps);
 
   // 6. The chosen LED is now known to be centred under the detector, so the wheel
   //    rotation there is DETECTOR_DEG minus the LED's own angle within its ring.
@@ -494,8 +508,9 @@ void loop() {
   stepWheel(motorSpeed);
   stepsSinceSwitch += motorSpeed;
 
-  int switchState = digitalRead(DETECTOR_PIN);
-  if (switchState == LOW && lastSwitchState == HIGH) {
+  /*
+  bool switchState = detectorRaw();
+  if (!switchState && lastSwitchState == HIGH) {
     unsigned long now = millis();
     Serial.print("Revolution: ");
     Serial.print(now - lastSwitchMs);
@@ -506,6 +521,8 @@ void loop() {
     buttonPushed = true;
   }
   lastSwitchState = switchState;
+  */
+
 
 
   if (now - lastReportMs >= 50) {
