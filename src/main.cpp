@@ -82,28 +82,44 @@ uint32_t GREEN = strip.Color(0, 255, 0);
 uint32_t BLUE = strip.Color(0, 0, 255);
 
 
-uint32_t getRainbowColor(float pos) {
-    pos -= (int) pos;
+uint32_t getRainbowColor(float pos, float brightness) {
     // 1. Constrain 'pos' to strictly stay within the 0.0 - 1.0 bounds
+    pos -= (int) pos;
     if (pos < 0.0) pos = 0.0;
     if (pos > 1.0) pos = 1.0;
 
-    // 2. Map the 0.0-1.0 float to a 0-255 integer
+    // 2. Constrain 'brightness' to strictly stay within 0.0 - 1.0 bounds
+    if (brightness < 0.0) brightness = 0.0;
+    if (brightness > 1.0) brightness = 1.0;
+
+    // 3. Map the 0.0-1.0 float to a 0-255 integer
     byte wheelPos = pos * 255.0;
 
-    // 3. Divide the color wheel into three equal sectors
+    // Variables to hold the raw color before brightness is applied
+    byte r, g, b;
+
+    // 4. Divide the color wheel into three equal sectors
     if (wheelPos < 85) {
         // Sector 1: Red fading to Green
-        return strip.Color(255 - wheelPos * 3, wheelPos * 3, 0);
+        r = 255 - wheelPos * 3;
+        g = wheelPos * 3;
+        b = 0;
     } else if (wheelPos < 170) {
         // Sector 2: Green fading to Blue
         wheelPos -= 85;
-        return strip.Color(0, 255 - wheelPos * 3, wheelPos * 3);
+        r = 0;
+        g = 255 - wheelPos * 3;
+        b = wheelPos * 3;
     } else {
         // Sector 3: Blue fading to Red
         wheelPos -= 170;
-        return strip.Color(wheelPos * 3, 0, 255 - wheelPos * 3);
+        r = wheelPos * 3;
+        g = 0;
+        b = 255 - wheelPos * 3;
     }
+
+    // 5. Apply the brightness multiplier and return the final color
+    return strip.Color(r * brightness, g * brightness, b * brightness);
 }
 
 // ---------------------------------------------------------------------------
@@ -392,26 +408,27 @@ uint32_t pixelColor(
   if (closeness < 0) closeness = 0;
 
 
-  float ringP = fmodf(millis() / (5000.0f), ring);
+  float ringP = fmodf(millis() / (5000.0f), NUM_RINGS);
 
-  float brightness = fabsf(ring - ringP);
+  float brightness = 1 - (min(fabsf(ring - ringP), fabsf(NUM_RINGS + ring - ringP)));
   if (brightness < 0) { brightness = 0; }
-  return strip.Color((byte) (brightness * 255), 0, 0);
+
+  byte b = (byte) (brightness * 255);
 
   // First ring bright white (split light)
-  if (ring == 0) return WHITE;
+  if (ring == 0) return strip.color(b, b, b);
 
   // Second ring in rainbow mode
   if (ring == 2) {
-    return getRainbowColor(pixelDeg / 360.f + millis() / 3000.0f);
+    return getRainbowColor(pixelDeg / 360.f + millis() / 3000.0f, brightness);
   }
 
   /*** Light pixels up by their distance to a hole ***/
   byte b = (byte)(closeness * 255);
   if (distanceToClosestHole < 0) {
-    return strip.Color((byte) (closeness * 255), 0, 0);
+    return strip.Color((byte) (closeness * brightness * 255), 0, 0);
   } else {
-    return strip.Color(0, (byte) (closeness * 255), 0);
+    return strip.Color(0, (byte) (closeness * brightness * 255), 0);
   }
 
   /** Light up just the top, 340-360deg in green, 0-20 deg in red **/
@@ -485,7 +502,8 @@ void loop() {
                   getRainbowColor(
                       ((
                           (ringPixel + 0.0) / ringSizes[ring]
-                       ) + now / 1000.0)
+                       ) + now / 1000.0),
+                      1.0f
                   )
               );
               if ((ringPixel + now / 15) % ringSizes[ring] != 0) {
