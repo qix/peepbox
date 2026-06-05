@@ -1,3 +1,4 @@
 .pio/
 .direnv/
 *.swp
+secrets.ini

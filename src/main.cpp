@@ -1,6 +1,17 @@
 #include <Arduino.h>
 #include <Adafruit_NeoPixel.h>
 #include <Stepper.h>
+#include <WiFi.h>
+#include <ArduinoOTA.h>
+
+// WiFi credentials come from build flags (see platformio.ini + secrets.ini).
+// Fallbacks here just let it compile if you haven't filled secrets.ini yet.
+#ifndef WIFI_SSID
+#define WIFI_SSID "your-ssid"
+#endif
+#ifndef WIFI_PASS
+#define WIFI_PASS "your-pass"
+#endif
 
 // Configuration
 #define SWITCH_PIN 23
@@ -15,6 +26,7 @@ const float SWITCH_ROT = 225.25;
 
 int motorSpeed = 10;
 bool buttonPushed = false;
+bool otaReady = false;
 
 Stepper motor(STEPS_PER_REV, 25, 27, 26, 14);
 
@@ -68,6 +80,46 @@ uint32_t getRainbowColor(float pos) {
     }
 }
 
+void setupOTA() {
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+
+  // Bounded wait — don't hang the wheel forever if the network is down.
+  unsigned long start = millis();
+  while (WiFi.status() != WL_CONNECTED && millis() - start < 10000) {
+    delay(250);
+    Serial.print('.');
+  }
+
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("\nWiFi failed; running without OTA.");
+    return;
+  }
+
+  ArduinoOTA.setHostname("led-wheel");     // reachable as led-wheel.local
+  // ArduinoOTA.setPassword("changeme");   // uncomment to require a password
+
+  ArduinoOTA.onStart([]() {
+    // Stop the motor and blank the LEDs so the flash write runs cleanly.
+    motorSpeed = 0;
+    strip.clear();
+    strip.show();
+    Serial.println("OTA update starting...");
+  });
+  ArduinoOTA.onProgress([](unsigned int done, unsigned int total) {
+    Serial.printf("OTA %u%%\r", (done * 100) / total);
+  });
+  ArduinoOTA.onError([](ota_error_t err) {
+    Serial.printf("\nOTA error %u\n", err);
+  });
+  ArduinoOTA.onEnd([]() { Serial.println("\nOTA done, rebooting."); });
+
+  ArduinoOTA.begin();
+  otaReady = true;
+  Serial.print("OTA ready at ");
+  Serial.println(WiFi.localIP());
+}
+
 void setup() {
   Serial.begin(115200);
   motor.setSpeed(15);
@@ -85,10 +137,14 @@ void setup() {
   ringColors[3] = strip.Color(255, 255, 0); // Ring 4: Yellow
   ringColors[4] = strip.Color(255, 0, 255); // Ring 5: Purple
 
+  setupOTA();
+
   Serial.println("--- Multi-Ring Controller Ready ---");
 }
 
 void loop() {
+  if (otaReady) ArduinoOTA.handle();
+
   static long stepsSinceSwitch = 0;
   static long stepsPerRev = BIG_WHEEL_STEPS;
   static unsigned long lastSwitchMs = millis();
