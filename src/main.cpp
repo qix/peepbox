@@ -113,12 +113,34 @@ long wheelSteps = 0;       // total motor steps since boot; never reset
 long zeroStepOffset = 0;   // value of wheelSteps that corresponds to 0 deg
 bool calibrated = false;
 
-// True when light is reaching the detector through a hole. Flip the comparison if
-// your sensor is active-low; if it's analog, swap for an analogRead() threshold.
+// How long the detector line must hold a value before calibration trusts it.
+#define DETECTOR_DEBOUNCE_MS 5
+
+// Single raw sample of the detector line. True when light is reaching the sensor
+// through a hole. Flip the comparison if your sensor is active-low; if it's
+// analog, swap for an analogRead() threshold.
+bool detectorRaw() {
+  return digitalRead(DETECTOR_PIN) == LOW;
+}
+
+// Debounced read used during calibration: returns a value only once the line has
+// held it steady for DETECTOR_DEBOUNCE_MS, so a brief glitch at a hole edge isn't
+// counted. The stability window restarts whenever a sample differs; an overall
+// cap stops it spinning forever if the line never settles.
 bool detectorReads() {
-  bool result = digitalRead(DETECTOR_PIN) == LOW;
-  Serial.printf("Read %d\n", result);
-  return result;
+  bool value = detectorRaw();
+  unsigned long stableSince = millis();
+  unsigned long start = stableSince;
+  while (millis() - stableSince < DETECTOR_DEBOUNCE_MS) {
+    bool sample = detectorRaw();
+    if (sample != value) {
+      value = sample;
+      stableSince = millis();   // changed: restart the 5 ms window
+    }
+    if (millis() - start > 50) break;  // never settled; take the latest sample
+  }
+  Serial.printf("Read %d\n", value);
+  return value;
 }
 
 // Step the wheel by `steps` in the running direction, keeping wheelSteps in sync.
