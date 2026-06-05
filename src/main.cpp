@@ -34,6 +34,9 @@ const int MOTOR_STEPS = 2048;
 const int BIG_WHEEL_STEPS = 30720;
 const int REV_STEPS = 30720;
 
+// Amount of steps to ensure the gears engage
+const int BUFFER_STEPS = 256;
+
 const float SWITCH_ROT = 225.25;
 
 // Light detector mounted over the outermost ring (ring idx 4). Reads HIGH when an
@@ -162,12 +165,12 @@ bool detectorReads() {
 // DETECTOR_EDGE_DEBOUNCE_MS to reject a hole-edge glitch before trusting the change.
 // Unlike detectorReads(), there is no fixed per-call wait.
 bool detectorHolds(bool expected) {
-  if (detectorRaw() == expected) return expected;
+  if (detectorRaw() == expected) return true;
   unsigned long changedAt = millis();
   while (millis() - changedAt < DETECTOR_EDGE_DEBOUNCE_MS) {
-    if (detectorRaw() == expected) return expected;  // glitch; snapped back
+    if (detectorRaw() == expected) return true;  // glitch; snapped back
   }
-  return !expected;  // the flip held: a real edge
+  return false;  // the flip held: a real edge
 }
 
 // Step the wheel by `steps` in the running direction, keeping wheelSteps in sync.
@@ -262,17 +265,21 @@ void calibrate() {
   //    costs nothing; we only wait when a reading flips, to confirm a real edge.
   setOneLed(ringStart[4] + chosen, WHITE);
 
-  Serial.printf("% 4dms] Step 5a. Step until detector is off\n", millis());
-  while (detectorHolds(true)) stepWheel(1);    // forward to the high-side edge
+  Serial.printf("% 4dms] Step 5a. Reverse until detector is off\n", millis());
+  while (detectorHolds(true)) stepWheel(-1);
+
+  // Make sure we overshoot a little, so that the gear has a chance to engage in the
+  // forward pass, since there's a bit of give in each direction.
+  stepWheel(-BUFFER_STEPS);
+
+  Serial.printf("% 4dms] Step 5b. Step until detector back on\n", millis());
+  while (detectorHolds(false)) stepWheel(1);  // back into the ON span
   long highEdge = wheelSteps;
-  Serial.printf("% 4dms] Step 5b. Reverse until detector back on\n", millis());
-  Serial.println(detectorRaw());
-  Serial.println(detectorRaw());
-  Serial.println(detectorRaw());
-  while (detectorHolds(false)) stepWheel(-1);  // back into the ON span
+
   Serial.printf("% 4dms] Step 5c. Step until detector is off again\n", millis());
-  while (detectorHolds(true)) stepWheel(-1);   // out the far (low-side) edge
+  while (detectorHolds(true)) stepWheel(1);   // Went off
   long lowEdge = wheelSteps;
+
   long centerSteps = (highEdge + lowEdge) / 2;
   Serial.printf("% 4dms] Result: %d steps\n", millis(), centerSteps);
 
@@ -362,15 +369,51 @@ uint32_t pixelColor(
     int ring,
     int ringPixel
 ) {
+  // Where this LED currently sits, in degrees, as the wheel turns. The
+  // LEDs are evenly spaced around the ring, and the whole ring is rotated
+  // by `degrees`.
   float pixelDeg = fmod(
       ((ringPixel * 360.0f) / ringSizes[ring] - wheelDegrees) + 270, 360.0);
   if (pixelDeg < 0) pixelDeg += 360.0;
 
+  // Holes are evenly spaced too, with the first one at firstHoleDeg[ring].
+  // Reduce the gap from that first hole into a single hole spacing, then
+  // centre it so it measures the distance to the *nearest* hole.
+  float holeSpacing = 360.0f / holeCounts[ring];
+  float distanceToClosestHole = fmodf(pixelDeg - firstHoleDeg[ring], holeSpacing);
+  if (distanceToClosestHole >  holeSpacing / 2) distanceToClosestHole -= holeSpacing;
+  if (distanceToClosestHole < -holeSpacing / 2) distanceToClosestHole += holeSpacing;
+  // distanceToClosestHole < 0  -> the hole is still coming up
+  // distanceToClosestHole > 0  -> the hole has just passed
+
+  // Light the pixel brightest when it lines up with a hole, fading out as
+  // it moves away. (Tweak this to taste.)
+  float closeness = 1.0f - fabsf(distanceToClosestHole) / (holeSpacing / 2);
+  if (closeness < 0) closeness = 0;
+
+  // First ring bright white (split light)
+  if (ring == 0) return WHITE;
+
+  // Second ring in rainbow mode
+  if (ring == 2) {
+    return getRainbowColor(pixelDeg / 360.f + millis() / 3000.0f);
+  }
+
+  /*** Light pixels up by their distance to a hole ***/
+  byte b = (byte)(closeness * 255);
+  if (distanceToClosestHole < 0) {
+    return strip.Color((byte) (closeness * 255), 0, 0);
+  } else {
+    return strip.Color(0, (byte) (closeness * 255), 0);
+  }
+
+  /** Light up just the top, 340-360deg in green, 0-20 deg in red **/
   if (pixelDeg > 0 && pixelDeg < 20) {
     return strip.Color(255, 0, 0);
   } else if (pixelDeg > 340) {
     return strip.Color(0, 255, 0);
   }
+
   return 0; //getRainbowColor(pixelDeg / 360.0f);
 
   if (pixelDeg < 90) {
@@ -407,10 +450,6 @@ void loop() {
     int ring = 0;
     int ringPixel = 0;
     for (int i = 0; i < TOTAL_LEDS; i++) {
-      // Where this LED currently sits, in degrees, as the wheel turns. The
-      // LEDs are evenly spaced around the ring, and the whole ring is rotated
-      // by `degrees`.
-
       strip.setPixelColor(i, pixelColor(degrees, i, ring, ringPixel));
 
       // Advance to the next LED, rolling over into the next ring.
@@ -422,27 +461,6 @@ void loop() {
 
       /*
 
-      // Holes are evenly spaced too, with the first one at firstHoleDeg[ring].
-      // Reduce the gap from that first hole into a single hole spacing, then
-      // centre it so it measures the distance to the *nearest* hole.
-      float holeSpacing = 360.0f / holeCounts[ring];
-      float distanceToClosestHole = fmodf(pixelDeg - firstHoleDeg[ring], holeSpacing);
-      if (distanceToClosestHole >  holeSpacing / 2) distanceToClosestHole -= holeSpacing;
-      if (distanceToClosestHole < -holeSpacing / 2) distanceToClosestHole += holeSpacing;
-      // distanceToClosestHole < 0  -> the hole is still coming up
-      // distanceToClosestHole > 0  -> the hole has just passed
-
-      // Light the pixel brightest when it lines up with a hole, fading out as
-      // it moves away. (Tweak this to taste.)
-      float closeness = 1.0f - fabsf(distanceToClosestHole) / (holeSpacing / 2);
-      if (closeness < 0) closeness = 0;
-      byte b = (byte)(closeness * 255);
-
-      if (distanceToClosestHole < 0) {
-        strip.setPixelColor(i, strip.Color(b, 0, 0));
-      } else {
-        strip.setPixelColor(i, strip.Color(0, b, 0));
-      }
       */
     }
   }else if (1 || now % 15000 < 10000) {
