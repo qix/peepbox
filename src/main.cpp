@@ -1,6 +1,17 @@
 #include <Arduino.h>
 #include <Adafruit_NeoPixel.h>
 #include <Stepper.h>
+
+// OTA / WiFi is compiled in only when ENABLE_OTA is truthy. Set the env var and
+// build (e.g. `ENABLE_OTA=1 pio run`) to include it; when unset or 0 none of the
+// WiFi/ArduinoOTA libraries or code are pulled in. See platformio.ini.
+#if defined(ENABLE_OTA) && (ENABLE_OTA + 0)
+  #define OTA_ENABLED 1
+#else
+  #define OTA_ENABLED 0
+#endif
+
+#if OTA_ENABLED
 #include <WiFi.h>
 #include <ArduinoOTA.h>
 
@@ -12,6 +23,7 @@
 #ifndef WIFI_PASS
 #define WIFI_PASS "your-pass"
 #endif
+#endif // OTA_ENABLED
 
 // Configuration
 #define LED_PIN    32
@@ -34,7 +46,9 @@ const float DETECTOR_DEG = SWITCH_ROT;
 
 int motorSpeed = 10;
 bool buttonPushed = false;
+#if OTA_ENABLED
 bool otaReady = false;
+#endif
 
 Stepper motor(STEPS_PER_REV, 25, 27, 26, 14);
 
@@ -209,6 +223,7 @@ void calibrate() {
                 "zeroStepOffset=%ld\n", centerSteps, rotationAtCenter, zeroStepOffset);
 }
 
+#if OTA_ENABLED
 void setupOTA() {
   WiFi.mode(WIFI_STA);
   WiFi.begin(WIFI_SSID, WIFI_PASS);
@@ -248,6 +263,7 @@ void setupOTA() {
   Serial.print("OTA ready at ");
   Serial.println(WiFi.localIP());
 }
+#endif // OTA_ENABLED
 
 void setup() {
   Serial.begin(115200);
@@ -266,7 +282,9 @@ void setup() {
   ringColors[3] = strip.Color(255, 255, 0); // Ring 4: Yellow
   ringColors[4] = strip.Color(255, 0, 255); // Ring 5: Purple
 
+#if OTA_ENABLED
   setupOTA();
+#endif
 
   calibrate();
 
@@ -274,7 +292,9 @@ void setup() {
 }
 
 void loop() {
+#if OTA_ENABLED
   if (otaReady) ArduinoOTA.handle();
+#endif
 
   static long stepsSinceSwitch = 0;
   static long stepsPerRev = BIG_WHEEL_STEPS;
