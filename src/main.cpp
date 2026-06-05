@@ -30,8 +30,9 @@
 #define NUM_RINGS   5
 #define DELAY_MS    100  // Sped it up slightly since there are 104 LEDs now!
 
-const int STEPS_PER_REV = 2048;
+const int MOTOR_STEPS = 2048;
 const int BIG_WHEEL_STEPS = 30720;
+const int REV_STEPS = 30720;
 
 const float SWITCH_ROT = 225.25;
 
@@ -42,7 +43,7 @@ const float SWITCH_ROT = 225.25;
 // Physical angle of that detector around the wheel, in degrees: the wheel rotation
 // at which ring-4 LED #0 would sit directly under the sensor. Measure this for your
 // build. (Defaults to the mechanical-switch angle as a placeholder.)
-const float DETECTOR_DEG = SWITCH_ROT;
+const float DETECTOR_DEG = 180;
 
 int motorSpeed = 10;
 bool buttonPushed = false;
@@ -50,7 +51,7 @@ bool buttonPushed = false;
 bool otaReady = false;
 #endif
 
-Stepper motor(STEPS_PER_REV, 25, 27, 26, 14);
+Stepper motor(MOTOR_STEPS, 25, 27, 26, 14);
 
 // Define the sizes of your rings
 
@@ -114,7 +115,7 @@ long zeroStepOffset = 0;   // value of wheelSteps that corresponds to 0 deg
 bool calibrated = false;
 
 // How long the detector line must hold a value before calibration trusts it.
-#define DETECTOR_DEBOUNCE_MS 5
+#define DETECTOR_DEBOUNCE_MS 50
 
 // Single raw sample of the detector line. True when light is reaching the sensor
 // through a hole. Flip the comparison if your sensor is active-low; if it's
@@ -139,7 +140,6 @@ bool detectorReads() {
     }
     if (millis() - start > 50) break;  // never settled; take the latest sample
   }
-  Serial.printf("Read %d\n", value);
   return value;
 }
 
@@ -164,7 +164,8 @@ void setOneLed(int idx, uint32_t color) {
 // that took in ms. Bounded so a missing/stuck sensor can't hang startup.
 unsigned long waitDetector(bool target) {
   unsigned long start = millis();
-  while (detectorReads() != target && millis() - start < 1000) {
+  delay(25);
+  while (millis() - start < 1000) {
     if (detectorReads() == target) {
       return millis() - start;
     }
@@ -199,12 +200,12 @@ void calibrate() {
   setAllLeds(0);
   delay(100);
   unsigned long offTime = waitDetector(false);
-  Serial.printf("2. Wait until off (%dms)\n", offTime);
+  Serial.printf("% 4dms] 2. Wait until off (%dms)\n", millis(), offTime);
 
   // 3. Measure the ON switching time (light restored -> reads 1).
   setAllLeds(WHITE);
   unsigned long onTime = waitDetector(true);
-  Serial.printf("3. Wait until back on (%dms)\n", onTime);
+  Serial.printf("% 4dms] 3. Wait until back on (%dms)\n", millis(), onTime);
 
   // Settle interval for the per-LED sweep: double the slower switch time.
   unsigned long settle = 2 * max(offTime, onTime);
@@ -280,7 +281,7 @@ void setupOTA() {
   ArduinoOTA.onError([](ota_error_t err) {
     Serial.printf("\nOTA error %u\n", err);
   });
-  ArduinoOTA.onEnd([]() { Serial.println("\nOTA done, rebooting."); });
+  +rduinoOTA.onEnd([]() { Serial.println("\nOTA done, rebooting."); });
 
   ArduinoOTA.begin();
   otaReady = true;
@@ -315,13 +316,40 @@ void setup() {
   Serial.println("--- Multi-Ring Controller Ready ---");
 }
 
+uint32_t pixelColor(
+    float wheelDegrees,
+
+    int i,
+    int ring,
+    int ringPixel
+) {
+  float pixelDeg = fmod(
+      ((ringPixel * 360.0f) / ringSizes[ring] - wheelDegrees) + 270, 360.0);
+  if (pixelDeg < 0) pixelDeg += 360.0;
+
+  if (pixelDeg > 0 && pixelDeg < 20) {
+    return strip.Color(255, 0, 0);
+  } else if (pixelDeg > 340) {
+    return strip.Color(0, 255, 0);
+  }
+  return 0; //getRainbowColor(pixelDeg / 360.0f);
+
+  if (pixelDeg < 90) {
+    return strip.Color(255, 0, 0);
+  } else if (pixelDeg < 180) {
+    return strip.Color(0, 255, 0);
+  } else if (pixelDeg < 270) {
+    return strip.Color(0, 0, 255);
+  }
+  return strip.Color(0, 0, 0);
+}
+
 void loop() {
 #if OTA_ENABLED
   if (otaReady) ArduinoOTA.handle();
 #endif
 
   static long stepsSinceSwitch = 0;
-  static long stepsPerRev = BIG_WHEEL_STEPS;
   static unsigned long lastSwitchMs = millis();
   static unsigned long lastReportMs = millis();
   static int lastSwitchState = HIGH;
@@ -332,7 +360,7 @@ void loop() {
 
   // Current rotation of the wheel since the last switch trigger.
   float degrees = calibrated ? currentRotationDeg()
-                             : (stepsSinceSwitch * 360.0f) / stepsPerRev;
+                             : (stepsSinceSwitch * 360.0f) / REV_STEPS;
 
   if (1) {
     // Walk every pixel in the chain, tracking which ring it belongs to and
@@ -343,7 +371,17 @@ void loop() {
       // Where this LED currently sits, in degrees, as the wheel turns. The
       // LEDs are evenly spaced around the ring, and the whole ring is rotated
       // by `degrees`.
-      float pixelDeg = (ringPixel * 360.0f) / ringSizes[ring] + degrees;
+
+      strip.setPixelColor(i, pixelColor(degrees, i, ring, ringPixel));
+
+      // Advance to the next LED, rolling over into the next ring.
+      ringPixel += 1;
+      if (ringPixel >= ringSizes[ring]) {
+        ringPixel = 0;
+        ring += 1;
+      }
+
+      /*
 
       // Holes are evenly spaced too, with the first one at firstHoleDeg[ring].
       // Reduce the gap from that first hole into a single hole spacing, then
@@ -362,17 +400,11 @@ void loop() {
       byte b = (byte)(closeness * 255);
 
       if (distanceToClosestHole < 0) {
-	strip.setPixelColor(i, strip.Color(b, 0, 0));
+        strip.setPixelColor(i, strip.Color(b, 0, 0));
       } else {
-	strip.setPixelColor(i, strip.Color(0, b, 0));
+        strip.setPixelColor(i, strip.Color(0, b, 0));
       }
-
-      // Advance to the next LED, rolling over into the next ring.
-      ringPixel += 1;
-      if (ringPixel >= ringSizes[ring]) {
-        ringPixel = 0;
-        ring += 1;
-      }
+      */
     }
   }else if (1 || now % 15000 < 10000) {
       int ring = 0;
@@ -415,7 +447,7 @@ void loop() {
     //strip.setPixelColor(ringStart[3], strip.Color(0, 255, 0));
     //strip.setPixelColor(ringStart[4], strip.Color(0, 0, 255));
 
-    float revFraction = (float)stepsSinceSwitch / stepsPerRev;
+    float revFraction = (float)stepsSinceSwitch / REV_STEPS;
     for (int r = 0; r < NUM_RINGS; r++) {
       float offsetFloat = (revFraction * ringSizes[r]);
       if (offsetFloat - (int)offsetFloat < 0.9) {
@@ -444,7 +476,6 @@ void loop() {
     Serial.print(now - lastSwitchMs);
     Serial.print(" ms, steps: ");
     Serial.println(stepsSinceSwitch);
-    stepsPerRev = stepsSinceSwitch;
     lastSwitchMs = now;
     stepsSinceSwitch = 0;
     buttonPushed = true;
