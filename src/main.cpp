@@ -14,7 +14,6 @@
 #endif
 
 // Configuration
-#define SWITCH_PIN 23
 #define LED_PIN    32
 #define NUM_RINGS   5
 #define DELAY_MS    100  // Sped it up slightly since there are 104 LEDs now!
@@ -26,7 +25,8 @@ const float SWITCH_ROT = 225.25;
 
 // Light detector mounted over the outermost ring (ring idx 4). Reads HIGH when an
 // LED shines through an aligned hole onto the sensor. Adjust the pin for your wiring.
-#define DETECTOR_PIN 34
+#define DETECTOR_PIN 23
+
 // Physical angle of that detector around the wheel, in degrees: the wheel rotation
 // at which ring-4 LED #0 would sit directly under the sensor. Measure this for your
 // build. (Defaults to the mechanical-switch angle as a placeholder.)
@@ -44,7 +44,7 @@ int ringSizes[NUM_RINGS] = {12, 16, 20, 24, 32};
 int ringStart[NUM_RINGS] = {0, 12, 28, 48, 72};
 float firstHoleDeg[NUM_RINGS] = {
   SWITCH_ROT,
-  SWITCH_ROT + 180.00 / ringSizes[1],
+  (float) (SWITCH_ROT + 180.00 / ringSizes[1]),
   SWITCH_ROT,
   SWITCH_ROT,
   SWITCH_ROT,
@@ -102,7 +102,7 @@ bool calibrated = false;
 // True when light is reaching the detector through a hole. Flip the comparison if
 // your sensor is active-low; if it's analog, swap for an analogRead() threshold.
 bool detectorReads() {
-  return digitalRead(DETECTOR_PIN) == HIGH;
+  return digitalRead(DETECTOR_PIN) == LOW;
 }
 
 // Step the wheel by `steps` in the running direction, keeping wheelSteps in sync.
@@ -126,8 +126,14 @@ void setOneLed(int idx, uint32_t color) {
 // that took in ms. Bounded so a missing/stuck sensor can't hang startup.
 unsigned long waitDetector(bool target) {
   unsigned long start = millis();
-  while (detectorReads() != target && millis() - start < 1000) { /* spin */ }
-  return millis() - start;
+  while (detectorReads() != target && millis() - start < 1000) {
+    if (detectorReads() == target) {
+      return millis() - start;
+    }
+    /* spin */
+  }
+  Serial.printf("Detector read timeout waiting for %d\n", target);
+  return 1000;
 }
 
 // Current wheel rotation in [0,360); meaningful only once calibrated.
@@ -143,7 +149,9 @@ void calibrate() {
   // 1. Light everything and rotate until a hole lines an LED up with the detector.
   setAllLeds(WHITE);
   long startSteps = wheelSteps;
-  while (!detectorReads() && (wheelSteps - startSteps) < BIG_WHEEL_STEPS) stepWheel(1);
+  while (!detectorReads() && (wheelSteps - startSteps) < BIG_WHEEL_STEPS) {
+    stepWheel(1);
+  }
   if (!detectorReads()) {
     Serial.println("Calibration FAILED: no hole/detector alignment found.");
     return;
@@ -151,11 +159,14 @@ void calibrate() {
 
   // 2. Measure the detector's OFF switching time (light removed -> reads 0).
   setAllLeds(0);
+  delay(100);
   unsigned long offTime = waitDetector(false);
+  Serial.printf("2. Wait until off (%dms)\n", offTime);
 
   // 3. Measure the ON switching time (light restored -> reads 1).
   setAllLeds(WHITE);
   unsigned long onTime = waitDetector(true);
+  Serial.printf("2. Wait until back on (%dms)\n", onTime);
 
   // Settle interval for the per-LED sweep: double the slower switch time.
   unsigned long settle = 2 * max(offTime, onTime);
@@ -242,7 +253,6 @@ void setup() {
   Serial.begin(115200);
   motor.setSpeed(15);
 
-  pinMode(SWITCH_PIN, INPUT_PULLUP);
   pinMode(DETECTOR_PIN, INPUT);
 
   strip.begin();
@@ -383,7 +393,7 @@ void loop() {
   stepWheel(motorSpeed);
   stepsSinceSwitch += motorSpeed;
 
-  int switchState = digitalRead(SWITCH_PIN);
+  int switchState = digitalRead(DETECTOR_PIN);
   if (switchState == LOW && lastSwitchState == HIGH) {
     unsigned long now = millis();
     Serial.print("Revolution: ");
