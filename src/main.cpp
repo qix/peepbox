@@ -116,7 +116,9 @@ bool calibrated = false;
 // True when light is reaching the detector through a hole. Flip the comparison if
 // your sensor is active-low; if it's analog, swap for an analogRead() threshold.
 bool detectorReads() {
-  return digitalRead(DETECTOR_PIN) == LOW;
+  bool result = digitalRead(DETECTOR_PIN) == LOW;
+  Serial.printf("Read %d\n", result);
+  return result;
 }
 
 // Step the wheel by `steps` in the running direction, keeping wheelSteps in sync.
@@ -180,7 +182,7 @@ void calibrate() {
   // 3. Measure the ON switching time (light restored -> reads 1).
   setAllLeds(WHITE);
   unsigned long onTime = waitDetector(true);
-  Serial.printf("2. Wait until back on (%dms)\n", onTime);
+  Serial.printf("3. Wait until back on (%dms)\n", onTime);
 
   // Settle interval for the per-LED sweep: double the slower switch time.
   unsigned long settle = 2 * max(offTime, onTime);
