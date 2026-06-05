@@ -24,6 +24,14 @@ const int BIG_WHEEL_STEPS = 30720;
 
 const float SWITCH_ROT = 225.25;
 
+// Light detector mounted over the outermost ring (ring idx 4). Reads HIGH when an
+// LED shines through an aligned hole onto the sensor. Adjust the pin for your wiring.
+#define DETECTOR_PIN 34
+// Physical angle of that detector around the wheel, in degrees: the wheel rotation
+// at which ring-4 LED #0 would sit directly under the sensor. Measure this for your
+// build. (Defaults to the mechanical-switch angle as a placeholder.)
+const float DETECTOR_DEG = SWITCH_ROT;
+
 int motorSpeed = 10;
 bool buttonPushed = false;
 bool otaReady = false;
@@ -80,6 +88,116 @@ uint32_t getRainbowColor(float pos) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Initial position detection (startup calibration)
+//
+// Establishes where 0 deg is by finding which ring-4 LED sits under the light
+// detector, then centring on it. See SPEC.md "Initial position detection".
+// ---------------------------------------------------------------------------
+
+long wheelSteps = 0;       // total motor steps since boot; never reset
+long zeroStepOffset = 0;   // value of wheelSteps that corresponds to 0 deg
+bool calibrated = false;
+
+// True when light is reaching the detector through a hole. Flip the comparison if
+// your sensor is active-low; if it's analog, swap for an analogRead() threshold.
+bool detectorReads() {
+  return digitalRead(DETECTOR_PIN) == HIGH;
+}
+
+// Step the wheel by `steps` in the running direction, keeping wheelSteps in sync.
+void stepWheel(long steps) {
+  motor.step(-steps);
+  wheelSteps += steps;
+}
+
+void setAllLeds(uint32_t color) {
+  for (int i = 0; i < TOTAL_LEDS; i++) strip.setPixelColor(i, color);
+  strip.show();
+}
+
+void setOneLed(int idx, uint32_t color) {
+  strip.clear();
+  strip.setPixelColor(idx, color);
+  strip.show();
+}
+
+// Wait (wheel stationary) for the detector to reach `target`, returning how long
+// that took in ms. Bounded so a missing/stuck sensor can't hang startup.
+unsigned long waitDetector(bool target) {
+  unsigned long start = millis();
+  while (detectorReads() != target && millis() - start < 1000) { /* spin */ }
+  return millis() - start;
+}
+
+// Current wheel rotation in [0,360); meaningful only once calibrated.
+float currentRotationDeg() {
+  float deg = fmodf((wheelSteps - zeroStepOffset) * 360.0f / BIG_WHEEL_STEPS, 360.0f);
+  if (deg < 0) deg += 360.0f;
+  return deg;
+}
+
+void calibrate() {
+  Serial.println("Calibration: searching for zero...");
+
+  // 1. Light everything and rotate until a hole lines an LED up with the detector.
+  setAllLeds(WHITE);
+  long startSteps = wheelSteps;
+  while (!detectorReads() && (wheelSteps - startSteps) < BIG_WHEEL_STEPS) stepWheel(1);
+  if (!detectorReads()) {
+    Serial.println("Calibration FAILED: no hole/detector alignment found.");
+    return;
+  }
+
+  // 2. Measure the detector's OFF switching time (light removed -> reads 0).
+  setAllLeds(0);
+  unsigned long offTime = waitDetector(false);
+
+  // 3. Measure the ON switching time (light restored -> reads 1).
+  setAllLeds(WHITE);
+  unsigned long onTime = waitDetector(true);
+
+  // Settle interval for the per-LED sweep: double the slower switch time.
+  unsigned long settle = 2 * max(offTime, onTime);
+  if (settle < 5) settle = 5;
+  Serial.printf("Switch times: off=%lums on=%lums -> settle=%lums\n",
+                offTime, onTime, settle);
+
+  // 4. Light one ring-4 LED at a time; the one that reaches the detector is ours.
+  int chosen = -1;
+  for (int p = 0; p < ringSizes[4]; p++) {
+    setOneLed(ringStart[4] + p, WHITE);
+    delay(settle);
+    if (detectorReads()) { chosen = p; break; }
+  }
+  if (chosen < 0) {
+    Serial.println("Calibration FAILED: no single LED lit the detector.");
+    return;
+  }
+  Serial.printf("Chosen ring-4 LED: pixel %d (strip index %d)\n",
+                chosen, ringStart[4] + chosen);
+
+  // 5. Centre on the chosen LED: leave the current pulse, then capture the next
+  //    rising (0->1) and falling (1->0) edges and take their midpoint.
+  setOneLed(ringStart[4] + chosen, WHITE);
+  while (detectorReads()) stepWheel(1);    // off the current pulse
+  while (!detectorReads()) stepWheel(1);   // rising edge
+  long rising = wheelSteps;
+  while (detectorReads()) stepWheel(1);    // falling edge
+  long falling = wheelSteps;
+  long centerSteps = (rising + falling) / 2;
+
+  // 6. The chosen LED is now known to be centred under the detector, so the wheel
+  //    rotation there is DETECTOR_DEG minus the LED's own angle within its ring.
+  float ledAngle = chosen * 360.0f / ringSizes[4];
+  float rotationAtCenter = DETECTOR_DEG - ledAngle;
+  zeroStepOffset = centerSteps - lroundf(rotationAtCenter * BIG_WHEEL_STEPS / 360.0f);
+  calibrated = true;
+
+  Serial.printf("Calibration done: centerSteps=%ld, rotation there=%.2f deg, "
+                "zeroStepOffset=%ld\n", centerSteps, rotationAtCenter, zeroStepOffset);
+}
+
 void setupOTA() {
   WiFi.mode(WIFI_STA);
   WiFi.begin(WIFI_SSID, WIFI_PASS);
@@ -125,6 +243,7 @@ void setup() {
   motor.setSpeed(15);
 
   pinMode(SWITCH_PIN, INPUT_PULLUP);
+  pinMode(DETECTOR_PIN, INPUT);
 
   strip.begin();
   strip.show();
@@ -138,6 +257,8 @@ void setup() {
   ringColors[4] = strip.Color(255, 0, 255); // Ring 5: Purple
 
   setupOTA();
+
+  calibrate();
 
   Serial.println("--- Multi-Ring Controller Ready ---");
 }
@@ -156,7 +277,8 @@ void loop() {
   unsigned long now = millis();
 
   // Current rotation of the wheel since the last switch trigger.
-  float degrees = (stepsSinceSwitch * 360.0f) / stepsPerRev;
+  float degrees = calibrated ? currentRotationDeg()
+                             : (stepsSinceSwitch * 360.0f) / stepsPerRev;
 
   if (1) {
     // Walk every pixel in the chain, tracking which ring it belongs to and
@@ -258,7 +380,7 @@ void loop() {
 
   strip.show();
 
-  motor.step(-motorSpeed);
+  stepWheel(motorSpeed);
   stepsSinceSwitch += motorSpeed;
 
   int switchState = digitalRead(SWITCH_PIN);
