@@ -41,7 +41,7 @@ const float SWITCH_ROT = 225.25;
 
 // Light detector mounted over the outermost ring (ring idx 4). Reads HIGH when an
 // LED shines through an aligned hole onto the sensor. Adjust the pin for your wiring.
-#define DETECTOR_PIN 23
+#define DETECTOR_PIN 13
 
 // Physical angle of that detector around the wheel, in degrees: the wheel rotation
 // at which ring-4 LED #0 would sit directly under the sensor. Measure this for your
@@ -54,7 +54,7 @@ bool buttonPushed = false;
 bool otaReady = false;
 #endif
 
-Stepper motor(MOTOR_STEPS, 25, 27, 26, 14);
+Stepper motor(MOTOR_STEPS, 14, 26, 27, 25);//25, 27, 26, 14);
 
 // Define the sizes of your rings
 
@@ -68,9 +68,6 @@ float firstHoleDeg[NUM_RINGS] = {
   SWITCH_ROT,
 };
 int holeCounts[NUM_RINGS] = {20, 30, 40, 40, 50};
-
-// Define colors for each ring (Red, Green, Blue, Yellow, Purple)
-uint32_t ringColors[NUM_RINGS];
 
 // Total LEDs = 12 + 16 + 20 + 24 + 32 = 104
 #define TOTAL_LEDS 104
@@ -200,6 +197,14 @@ void setAllLeds(uint32_t color) {
   strip.show();
 }
 
+void setRingLeds(int ring, uint32_t color) {
+  strip.clear();
+  for (int i = ringStart[ring]; i < ringStart[ring] + ringSizes[ring]; i++) {
+    strip.setPixelColor(i, color);
+  }
+  strip.show();
+}
+
 void setOneLed(int idx, uint32_t color) {
   strip.clear();
   strip.setPixelColor(idx, color);
@@ -231,12 +236,19 @@ float currentRotationDeg() {
 void calibrate() {
   Serial.println("Calibration: searching for zero...");
 
+  Serial.printf("% 4dms] Step 0. Ensure detector is not broken\n", millis());
+  setAllLeds(0);
+  if (detectorReads()) {
+    Serial.println("Calibration FAILED: no detector found.");
+    return;
+  }
+
   // 1. Light everything and rotate until a hole lines an LED up with the detector.
   Serial.printf("% 4dms] Step 1. Find initial position\n", millis());
-  setAllLeds(WHITE);
+  setRingLeds(4, WHITE);
   long startSteps = wheelSteps;
-  while (!detectorReads() && (wheelSteps - startSteps) < BIG_WHEEL_STEPS) {
-    stepWheel(1);
+  while (!detectorHolds(true) && (wheelSteps - startSteps) < BIG_WHEEL_STEPS) {
+    stepWheel(3);
   }
   if (!detectorReads()) {
     Serial.println("Calibration FAILED: no hole/detector alignment found.");
@@ -250,7 +262,7 @@ void calibrate() {
   Serial.printf("% 4dms] Step 2. Wait until off (%dms)\n", millis(), offTime);
 
   // 3. Measure the ON switching time (light restored -> reads 1).
-  setAllLeds(WHITE);
+  setRingLeds(4, WHITE);
   unsigned long onTime = waitDetector(true);
   Serial.printf("% 4dms] Step 3. Wait until back on (%dms)\n", millis(), onTime);
 
@@ -352,22 +364,25 @@ void setupOTA() {
 }
 #endif // OTA_ENABLED
 
+void setDisco(bool red, bool green, bool blue) {
+  digitalWrite(19, !red);
+  digitalWrite(21, !green);
+  digitalWrite(18, !blue);
+}
 void setup() {
   Serial.begin(115200);
   motor.setSpeed(15);
 
   pinMode(DETECTOR_PIN, INPUT);
 
+  pinMode(18, OUTPUT);
+  pinMode(19, OUTPUT);
+  pinMode(21, OUTPUT);
+  setDisco(true, true, true);
+
   strip.begin();
   strip.show();
   strip.setBrightness(50);
-
-  // Initialize the color array using the strip.Color helper
-  ringColors[0] = strip.Color(255, 0, 0);   // Ring 1: Red
-  ringColors[1] = strip.Color(0, 255, 0);   // Ring 2: Green
-  ringColors[2] = strip.Color(0, 0, 255);   // Ring 3: Blue
-  ringColors[3] = strip.Color(255, 255, 0); // Ring 4: Yellow
-  ringColors[4] = strip.Color(255, 0, 255); // Ring 5: Purple
 
 #if OTA_ENABLED
   setupOTA();
@@ -376,6 +391,11 @@ void setup() {
   calibrate();
 
   Serial.println("--- Multi-Ring Controller Ready ---");
+}
+
+float ringDistance(float ring, float point) {
+  /** Calculate the distance between rings */
+  return min(fabsf(ring - point), fabsf(NUM_RINGS + ring - point));
 }
 
 uint32_t pixelColor(
@@ -409,14 +429,15 @@ uint32_t pixelColor(
 
 
   float ringP = fmodf(millis() / (5000.0f), NUM_RINGS);
+  float ringP2 = fmodf(millis() / (5000.0f) + 2500, NUM_RINGS);
 
-  float brightness = 1 - (min(fabsf(ring - ringP), fabsf(NUM_RINGS + ring - ringP)));
-  if (brightness < 0) { brightness = 0; }
+  float brightness = 1 - min(ringDistance(ring, ringP), ringDistance(ring, ringP));
+  if (brightness < 0) brightness = 0;
 
   byte b = (byte) (brightness * 255);
 
   // First ring bright white (split light)
-  if (ring == 0) return strip.color(b, b, b);
+  if (ring == 0) return strip.Color(b, b, b);
 
   // Second ring in rainbow mode
   if (ring == 2) {
@@ -424,7 +445,6 @@ uint32_t pixelColor(
   }
 
   /*** Light pixels up by their distance to a hole ***/
-  byte b = (byte)(closeness * 255);
   if (distanceToClosestHole < 0) {
     return strip.Color((byte) (closeness * brightness * 255), 0, 0);
   } else {
@@ -455,130 +475,45 @@ void loop() {
   if (otaReady) ArduinoOTA.handle();
 #endif
 
-  static long stepsSinceSwitch = 0;
-  static unsigned long lastSwitchMs = millis();
   static unsigned long lastReportMs = millis();
-  static int lastSwitchState = HIGH;
 
   strip.clear();
-
   unsigned long now = millis();
 
+  // Enable strobe effect
+  bool on = true; //(now / 20) % 2;
+  setDisco(on, on, on);
+
   // Current rotation of the wheel since the last switch trigger.
-  float degrees = calibrated ? currentRotationDeg()
-                             : (stepsSinceSwitch * 360.0f) / REV_STEPS;
+  // @todo: note if not calibrated
+  float degrees = currentRotationDeg();
 
-  if (1) {
-    // Walk every pixel in the chain, tracking which ring it belongs to and
-    // its index within that ring.
-    int ring = 0;
-    int ringPixel = 0;
-    for (int i = 0; i < TOTAL_LEDS; i++) {
+  // Walk every pixel in the chain, tracking which ring it belongs to and
+  // its index within that ring.
+  int ring = 0;
+  int ringPixel = 0;
+  for (int i = 0; i < TOTAL_LEDS; i++) {
+    if (on) {
       strip.setPixelColor(i, pixelColor(degrees, i, ring, ringPixel));
-
-      // Advance to the next LED, rolling over into the next ring.
-      ringPixel += 1;
-      if (ringPixel >= ringSizes[ring]) {
-        ringPixel = 0;
-        ring += 1;
-      }
-
-      /*
-
-      */
     }
-  }else if (1 || now % 15000 < 10000) {
-      int ring = 0;
-      int ringPixel = 0;
-      for (int i = 0; i < TOTAL_LEDS; i++) {
-          ringPixel += 1;
-          if (ringPixel >= ringSizes[ring]) {
-              ringPixel = 0;
-              ring += 1;
-          }
 
-          if (ring == 2) {
-              strip.setPixelColor(i,
-                  getRainbowColor(
-                      ((
-                          (ringPixel + 0.0) / ringSizes[ring]
-                       ) + now / 1000.0),
-                      1.0f
-                  )
-              );
-              if ((ringPixel + now / 15) % ringSizes[ring] != 0) {
-                  strip.setPixelColor(i, 0);
-              }
-          } else {
-            strip.setPixelColor(i, strip.Color(
-                255 * (ring % 2),
-                255 * ((ring + 1) % 2),
-                0 * (ring % 3 == 0)
-            ));
-          }
-      }
-  } else if (now % 15000 < 5000) {
-      for (int i = 0; i < TOTAL_LEDS; i++) {
-          strip.setPixelColor(i, strip.Color(128, (now / 10 + i) % 128, 128));
-      }
-  } else {
-    //strip.setPixelColor(0, strip.Color(255, 255, 255));
-    //strip.setPixelColor(ringStart[0], strip.Color(255, 0, 0));
-    //strip.setPixelColor(ringStart[1], strip.Color(255, 0, 255));
-    //strip.setPixelColor(ringStart[2], strip.Color(255, 255, 0));
-    //strip.setPixelColor(ringStart[3], strip.Color(0, 255, 0));
-    //strip.setPixelColor(ringStart[4], strip.Color(0, 0, 255));
-
-    float revFraction = (float)stepsSinceSwitch / REV_STEPS;
-    for (int r = 0; r < NUM_RINGS; r++) {
-      float offsetFloat = (revFraction * ringSizes[r]);
-      if (offsetFloat - (int)offsetFloat < 0.9) {
-          for (int e = 0; e < 8; e++) {
-              int offset = ((int)offsetFloat) % ringSizes[r];
-              if (offset < 0) offset += ringSizes[r];
-
-              offset = (offset + e * (ringSizes[r] / 8)) % ringSizes[r];
-              strip.setPixelColor(ringStart[r] + offset, strip.Color(255, 255, 255));
-              Serial.println(offset);
-          }
-      }
+    ringPixel += 1;
+    if (ringPixel >= ringSizes[ring]) {
+      ringPixel = 0;
+      ring += 1;
     }
   }
-
 
   strip.show();
-
   stepWheel(motorSpeed);
-  stepsSinceSwitch += motorSpeed;
-
-  /*
-  bool switchState = detectorRaw();
-  if (!switchState && lastSwitchState == HIGH) {
-    unsigned long now = millis();
-    Serial.print("Revolution: ");
-    Serial.print(now - lastSwitchMs);
-    Serial.print(" ms, steps: ");
-    Serial.println(stepsSinceSwitch);
-    lastSwitchMs = now;
-    stepsSinceSwitch = 0;
-    buttonPushed = true;
-  }
-  lastSwitchState = switchState;
-  */
-
-
 
   if (now - lastReportMs >= 50) {
+    if (!calibrated) {
+      Serial.print("UNCALIBRATED ");
+    }
     Serial.print("Rotation: ");
     Serial.print(degrees);
     Serial.println(" deg");
     lastReportMs = now;
   }
-  /**
-   * Used for centering on the wheel
-	  if (buttonPushed && degrees > 225.25) {
-	  //if (degrees > 0.10) {
-	    motorSpeed = 0;
-	  }
-  */
 }
