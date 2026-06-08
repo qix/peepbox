@@ -52,6 +52,7 @@ int motorSpeed = 10;
 bool buttonPushed = false;
 #if OTA_ENABLED
 bool otaReady = false;
+bool otaRunning = false;
 #endif
 
 Stepper motor(MOTOR_STEPS, 14, 26, 27, 25);//25, 27, 26, 14);
@@ -339,12 +340,13 @@ void setupOTA() {
     return;
   }
 
-  ArduinoOTA.setHostname("led-wheel");     // reachable as led-wheel.local
-  // ArduinoOTA.setPassword("changeme");   // uncomment to require a password
+  ArduinoOTA.setHostname("led-wheel");
+  ArduinoOTA.setPassword("wFemjxN28");
 
   ArduinoOTA.onStart([]() {
     // Stop the motor and blank the LEDs so the flash write runs cleanly.
     motorSpeed = 0;
+    otaRunning = true;
     strip.clear();
     strip.show();
     Serial.println("OTA update starting...");
@@ -436,12 +438,17 @@ uint32_t pixelColor(
 
   byte b = (byte) (brightness * 255);
 
-  // First ring bright white (split light)
-  if (ring == 0) return strip.Color(b, b, b);
+  // First/fourth ring bright white (split light)
+  if (ring == 0 || ring == 3) return strip.Color(b, b, b);
 
   // Second ring in rainbow mode
   if (ring == 2) {
     return getRainbowColor(pixelDeg / 360.f + millis() / 3000.0f, brightness);
+  }
+
+  // Fifth ring is fast rainbow
+  if (ring == 4) {
+    return getRainbowColor(pixelDeg / 360.f + millis() / 1000.0f, brightness);
   }
 
   /*** Light pixels up by their distance to a hole ***/
@@ -473,6 +480,9 @@ uint32_t pixelColor(
 void loop() {
 #if OTA_ENABLED
   if (otaReady) ArduinoOTA.handle();
+  if (otaRunning) {
+    return;
+  }
 #endif
 
   static unsigned long lastReportMs = millis();
@@ -481,7 +491,7 @@ void loop() {
   unsigned long now = millis();
 
   // Enable strobe effect
-  bool on = true; //(now / 20) % 2;
+  bool on = true;
   setDisco(on, on, on);
 
   // Current rotation of the wheel since the last switch trigger.
